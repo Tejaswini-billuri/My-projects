@@ -1,0 +1,545 @@
+{
+    "name": "IncrementalNYCRestaurantLoad",
+    "properties": {
+        "activities": [
+            {
+                "name": "GetLastInspectionDate",
+                "type": "Lookup",
+                "dependsOn": [],
+                "policy": {
+                    "timeout": "7.00:00:00",
+                    "retry": 3,
+                    "retryIntervalInSeconds": 60,
+                    "secureOutput": false,
+                    "secureInput": false
+                },
+                "userProperties": [],
+                "typeProperties": {
+                    "source": {
+                        "type": "DelimitedTextSource",
+                        "storeSettings": {
+                            "type": "AzureBlobFSReadSettings",
+                            "recursive": true,
+                            "wildcardFileName": "last_inspection_date*.csv"
+                        },
+                        "formatSettings": {
+                            "type": "DelimitedTextReadSettings"
+                        }
+                    },
+                    "dataset": {
+                        "referenceName": "ADLSWatermark",
+                        "type": "DatasetReference"
+                    },
+                    "firstRowOnly": true
+                }
+            },
+            {
+                "name": "SetWatermarkValue",
+                "type": "SetVariable",
+                "dependsOn": [
+                    {
+                        "activity": "GetLastInspectionDate",
+                        "dependencyConditions": [
+                            "Succeeded"
+                        ]
+                    }
+                ],
+                "policy": {
+                    "secureOutput": false,
+                    "secureInput": false
+                },
+                "userProperties": [],
+                "typeProperties": {
+                    "variableName": "watermarkValue",
+                    "value": {
+                        "value": "@activity('GetLastInspectionDate').output.firstRow.last_inspection_date",
+                        "type": "Expression"
+                    }
+                }
+            },
+            {
+                "name": "CheckNewData",
+                "type": "Lookup",
+                "dependsOn": [
+                    {
+                        "activity": "SetWatermarkValue",
+                        "dependencyConditions": [
+                            "Succeeded"
+                        ]
+                    }
+                ],
+                "policy": {
+                    "timeout": "7.00:00:00",
+                    "retry": 3,
+                    "retryIntervalInSeconds": 60,
+                    "secureOutput": false,
+                    "secureInput": false
+                },
+                "userProperties": [],
+                "typeProperties": {
+                    "source": {
+                        "type": "RestSource",
+                        "httpRequestTimeout": "00:05:00",
+                        "requestInterval": "00.00:00:00.010",
+                        "relativeUrl": {
+                            "value": "@concat('?$where=inspection_date%20%3E%20%27', variables('watermarkValue'), '%27&$limit=1')",
+                            "type": "Expression"
+                        }
+                    },
+                    "dataset": {
+                        "referenceName": "NYCRestaurantJSON",
+                        "type": "DatasetReference"
+                    },
+                    "firstRowOnly": false
+                }
+            },
+            {
+                "name": "SetInitialContinueLoading",
+                "type": "SetVariable",
+                "dependsOn": [
+                    {
+                        "activity": "CheckNewData",
+                        "dependencyConditions": [
+                            "Succeeded"
+                        ]
+                    }
+                ],
+                "policy": {
+                    "secureOutput": false,
+                    "secureInput": false
+                },
+                "userProperties": [],
+                "typeProperties": {
+                    "variableName": "continue_loading",
+                    "value": {
+                        "value": "@greater(length(activity('CheckNewData').output.value), 0)",
+                        "type": "Expression"
+                    }
+                }
+            },
+            {
+                "name": "ProcessIfNewData",
+                "type": "IfCondition",
+                "dependsOn": [
+                    {
+                        "activity": "SetInitialContinueLoading",
+                        "dependencyConditions": [
+                            "Succeeded"
+                        ]
+                    }
+                ],
+                "userProperties": [],
+                "typeProperties": {
+                    "expression": {
+                        "value": "@variables('continue_loading')",
+                        "type": "Expression"
+                    },
+                    "ifTrueActivities": [
+                        {
+                            "name": "PaginateUntil",
+                            "type": "Until",
+                            "dependsOn": [],
+                            "userProperties": [],
+                            "typeProperties": {
+                                "expression": {
+                                    "value": "@equals(variables('continue_loading'), true)",
+                                    "type": "Expression"
+                                },
+                                "activities": [
+                                    {
+                                        "name": "CopyAPIBatch",
+                                        "type": "Copy",
+                                        "dependsOn": [],
+                                        "policy": {
+                                            "timeout": "7.00:00:00",
+                                            "retry": 3,
+                                            "retryIntervalInSeconds": 60,
+                                            "secureOutput": false,
+                                            "secureInput": false
+                                        },
+                                        "userProperties": [],
+                                        "typeProperties": {
+                                            "source": {
+                                                "type": "RestSource",
+                                                "httpRequestTimeout": "00:05:00",
+                                                "requestInterval": "00.00:00:00.010",
+                                                "relativeUrl": {
+                                                    "value": "@concat('?$where=inspection_date%20%3E%20%27', variables('watermarkValue'), '%27&$limit=', string(pipeline().parameters.row_count), '&$offset=', string(variables('offset')))",
+                                                    "type": "Expression"
+                                                }
+                                            },
+                                            "sink": {
+                                                "type": "DelimitedTextSink",
+                                                "storeSettings": {
+                                                    "type": "AzureBlobFSWriteSettings"
+                                                },
+                                                "formatSettings": {
+                                                    "type": "DelimitedTextWriteSettings",
+                                                    "quoteAllText": true,
+                                                    "fileExtension": ".csv"
+                                                }
+                                            },
+                                            "enableStaging": false
+                                        },
+                                        "inputs": [
+                                            {
+                                                "referenceName": "NYCRestaurantJSON",
+                                                "type": "DatasetReference"
+                                            }
+                                        ],
+                                        "outputs": [
+                                            {
+                                                "referenceName": "ADLSRestaurantRawData",
+                                                "type": "DatasetReference",
+                                                "parameters": {
+                                                    "fileName": {
+                                                        "value": "@concat('temp/DOHMH_New_York_City_Restaurant_Inspection_Results_', formatDateTime(utcnow(), 'yyyyMMdd_HHmmss'), '_batch_', string(variables('offset')), '.csv')",
+                                                        "type": "Expression"
+                                                    }
+                                                }
+                                            }
+                                        ]
+                                    },
+                                    {
+                                        "name": "UpdateFetchedRows",
+                                        "type": "SetVariable",
+                                        "dependsOn": [
+                                            {
+                                                "activity": "CopyAPIBatch",
+                                                "dependencyConditions": [
+                                                    "Succeeded"
+                                                ]
+                                            }
+                                        ],
+                                        "policy": {
+                                            "secureOutput": false,
+                                            "secureInput": false
+                                        },
+                                        "userProperties": [],
+                                        "typeProperties": {
+                                            "variableName": "fetched_rows",
+                                            "value": {
+                                                "value": "@activity('CopyAPIBatch').output.rowsCopied",
+                                                "type": "Expression"
+                                            }
+                                        }
+                                    },
+                                    {
+                                        "name": "CalculateTotalFetchedRows",
+                                        "type": "SetVariable",
+                                        "dependsOn": [
+                                            {
+                                                "activity": "UpdateFetchedRows",
+                                                "dependencyConditions": [
+                                                    "Succeeded"
+                                                ]
+                                            }
+                                        ],
+                                        "policy": {
+                                            "secureOutput": false,
+                                            "secureInput": false
+                                        },
+                                        "userProperties": [],
+                                        "typeProperties": {
+                                            "variableName": "temp_total_fetched_rows",
+                                            "value": {
+                                                "value": "@add(variables('total_fetched_rows'), variables('fetched_rows'))",
+                                                "type": "Expression"
+                                            }
+                                        }
+                                    },
+                                    {
+                                        "name": "UpdateTotalFetchedRows",
+                                        "type": "SetVariable",
+                                        "dependsOn": [
+                                            {
+                                                "activity": "CalculateTotalFetchedRows",
+                                                "dependencyConditions": [
+                                                    "Succeeded"
+                                                ]
+                                            }
+                                        ],
+                                        "policy": {
+                                            "secureOutput": false,
+                                            "secureInput": false
+                                        },
+                                        "userProperties": [],
+                                        "typeProperties": {
+                                            "variableName": "total_fetched_rows",
+                                            "value": {
+                                                "value": "@variables('temp_total_fetched_rows')",
+                                                "type": "Expression"
+                                            }
+                                        }
+                                    },
+                                    {
+                                        "name": "StoreCurrentOffset",
+                                        "type": "SetVariable",
+                                        "dependsOn": [
+                                            {
+                                                "activity": "UpdateTotalFetchedRows",
+                                                "dependencyConditions": [
+                                                    "Succeeded"
+                                                ]
+                                            }
+                                        ],
+                                        "policy": {
+                                            "secureOutput": false,
+                                            "secureInput": false
+                                        },
+                                        "userProperties": [],
+                                        "typeProperties": {
+                                            "variableName": "offsetTemp",
+                                            "value": {
+                                                "value": "@variables('offset')",
+                                                "type": "Expression"
+                                            }
+                                        }
+                                    },
+                                    {
+                                        "name": "UpdateOffset",
+                                        "type": "SetVariable",
+                                        "dependsOn": [
+                                            {
+                                                "activity": "StoreCurrentOffset",
+                                                "dependencyConditions": [
+                                                    "Succeeded"
+                                                ]
+                                            }
+                                        ],
+                                        "policy": {
+                                            "secureOutput": false,
+                                            "secureInput": false
+                                        },
+                                        "userProperties": [],
+                                        "typeProperties": {
+                                            "variableName": "offset",
+                                            "value": {
+                                                "value": "@add(variables('offsetTemp'), pipeline().parameters.row_count)",
+                                                "type": "Expression"
+                                            }
+                                        }
+                                    },
+                                    {
+                                        "name": "SetContinueLoading",
+                                        "type": "SetVariable",
+                                        "dependsOn": [
+                                            {
+                                                "activity": "UpdateOffset",
+                                                "dependencyConditions": [
+                                                    "Succeeded"
+                                                ]
+                                            }
+                                        ],
+                                        "policy": {
+                                            "secureOutput": false,
+                                            "secureInput": false
+                                        },
+                                        "userProperties": [],
+                                        "typeProperties": {
+                                            "variableName": "continue_loading",
+                                            "value": {
+                                                "value": "@equals(variables('fetched_rows'), pipeline().parameters.row_count)",
+                                                "type": "Expression"
+                                            }
+                                        }
+                                    }
+                                ],
+                                "timeout": "7.00:00:00"
+                            }
+                        },
+                        {
+                            "name": "MergeIntoSingleFile",
+                            "type": "Copy",
+                            "dependsOn": [
+                                {
+                                    "activity": "PaginateUntil",
+                                    "dependencyConditions": [
+                                        "Succeeded"
+                                    ]
+                                }
+                            ],
+                            "policy": {
+                                "timeout": "7.00:00:00",
+                                "retry": 3,
+                                "retryIntervalInSeconds": 60,
+                                "secureOutput": false,
+                                "secureInput": false
+                            },
+                            "userProperties": [],
+                            "typeProperties": {
+                                "source": {
+                                    "type": "DelimitedTextSource",
+                                    "storeSettings": {
+                                        "type": "AzureBlobFSReadSettings",
+                                        "recursive": false,
+                                        "wildcardFolderPath": "temp",
+                                        "wildcardFileName": {
+                                            "value": "@concat('DOHMH_New_York_City_Restaurant_Inspection_Results_', formatDateTime(utcnow(), 'yyyyMMdd_HHmmss'), '_batch_*.csv')",
+                                            "type": "Expression"
+                                        }
+                                    },
+                                    "formatSettings": {
+                                        "type": "DelimitedTextReadSettings"
+                                    }
+                                },
+                                "sink": {
+                                    "type": "DelimitedTextSink",
+                                    "storeSettings": {
+                                        "type": "AzureBlobFSWriteSettings"
+                                    },
+                                    "formatSettings": {
+                                        "type": "DelimitedTextWriteSettings",
+                                        "quoteAllText": true,
+                                        "fileExtension": ".csv"
+                                    }
+                                },
+                                "enableStaging": false
+                            },
+                            "inputs": [
+                                {
+                                    "referenceName": "ADLSRestaurantRawData",
+                                    "type": "DatasetReference",
+                                    "parameters": {
+                                        "fileName": {
+                                            "value": "@concat('temp/DOHMH_New_York_City_Restaurant_Inspection_Results_', formatDateTime(utcnow(), 'yyyyMMdd_HHmmss'), '_batch_*.csv')",
+                                            "type": "Expression"
+                                        }
+                                    }
+                                }
+                            ],
+                            "outputs": [
+                                {
+                                    "referenceName": "ADLSRestaurantRawData",
+                                    "type": "DatasetReference",
+                                    "parameters": {
+                                        "fileName": {
+                                            "value": "@concat('DOHMH_New_York_City_Restaurant_Inspection_Results_', formatDateTime(utcnow(), 'yyyyMMdd_HHmmss'), '.csv')",
+                                            "type": "Expression"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    ]
+                }
+            },
+            {
+                "name": "UpdateWatermarkIfData",
+                "type": "IfCondition",
+                "dependsOn": [
+                    {
+                        "activity": "ProcessIfNewData",
+                        "dependencyConditions": [
+                            "Succeeded"
+                        ]
+                    }
+                ],
+                "userProperties": [],
+                "typeProperties": {
+                    "expression": {
+                        "value": "@greater(variables('total_fetched_rows'), 0)",
+                        "type": "Expression"
+                    },
+                    "ifTrueActivities": [
+                        {
+                            "name": "UpdateWatermark",
+                            "type": "Copy",
+                            "dependsOn": [],
+                            "policy": {
+                                "timeout": "7.00:00:00",
+                                "retry": 3,
+                                "retryIntervalInSeconds": 60,
+                                "secureOutput": false,
+                                "secureInput": false
+                            },
+                            "userProperties": [],
+                            "typeProperties": {
+                                "source": {
+                                    "type": "RestSource",
+                                    "httpRequestTimeout": "00:05:00",
+                                    "requestInterval": "00.00:00:00.010",
+                                    "relativeUrl": {
+                                        "value": "@concat('?$select=max(inspection_date)%20as%20last_inspection_date&$where=inspection_date%20%3E%20%27', variables('watermarkValue'), '%27')",
+                                        "type": "Expression"
+                                    }
+                                },
+                                "sink": {
+                                    "type": "DelimitedTextSink",
+                                    "storeSettings": {
+                                        "type": "AzureBlobFSWriteSettings"
+                                    },
+                                    "formatSettings": {
+                                        "type": "DelimitedTextWriteSettings",
+                                        "quoteAllText": true,
+                                        "fileExtension": ".csv"
+                                    }
+                                },
+                                "enableStaging": false
+                            },
+                            "inputs": [
+                                {
+                                    "referenceName": "NYCRestaurantJSON",
+                                    "type": "DatasetReference"
+                                }
+                            ],
+                            "outputs": [
+                                {
+                                    "referenceName": "ADLSWatermark",
+                                    "type": "DatasetReference"
+                                }
+                            ]
+                        }
+                    ]
+                }
+            }
+        ],
+        "parameters": {
+            "offset": {
+                "type": "int",
+                "defaultValue": 0
+            },
+            "row_count": {
+                "type": "int",
+                "defaultValue": 1000
+            },
+            "continue_loading": {
+                "type": "bool",
+                "defaultValue": true
+            }
+        },
+        "variables": {
+            "fetched_rows": {
+                "type": "Integer",
+                "defaultValue": 0
+            },
+            "total_fetched_rows": {
+                "type": "Integer",
+                "defaultValue": 0
+            },
+            "temp_total_fetched_rows": {
+                "type": "Integer",
+                "defaultValue": 0
+            },
+            "offset": {
+                "type": "Integer",
+                "defaultValue": 0
+            },
+            "offsetTemp": {
+                "type": "Integer",
+                "defaultValue": 0
+            },
+            "continue_loading": {
+                "type": "Boolean",
+                "defaultValue": true
+            },
+            "watermarkValue": {
+                "type": "String",
+                "defaultValue": "1900-01-01T00:00:00Z"
+            }
+        },
+        "annotations": [],
+        "lastPublishTime": "2025-03-09T17:13:49Z"
+    },
+    "type": "Microsoft.DataFactory/factories/pipelines"
+}
