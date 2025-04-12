@@ -1,0 +1,13 @@
+{
+    "name": "NYCRestaurantAPI",
+    "type": "Microsoft.DataFactory/factories/linkedservices",
+    "properties": {
+        "annotations": [],
+        "type": "RestService",
+        "typeProperties": {
+            "url": "https://data.cityofnewyork.us/resource/43nn-pn8j.json",
+            "enableServerCertificateValidation": true,
+            "authenticationType": "Anonymous"
+        }
+    }
+}
