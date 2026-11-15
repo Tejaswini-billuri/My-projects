@@ -1,0 +1,41 @@
+# One-command local environment: a Postgres warehouse plus Airflow standalone
+# (scheduler + API server + dag-processor in one container, SQLite metadata DB).
+#
+#   docker compose up --build        ->  http://localhost:8080  (no login needed)
+#   psql postgresql://bing:bing@localhost:5433/bing_dwh
+#
+# Trigger the `bing_ads_daily` DAG from the UI; the default param points at the bundled CSV.
+services:
+  warehouse:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: bing
+      POSTGRES_PASSWORD: bing
+      POSTGRES_DB: bing_dwh
+    ports:
+      - "5433:5432"          # 5433 on the host so it doesn't clash with a local Postgres
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bing -d bing_dwh"]
+      interval: 5s
+      retries: 10
+    volumes:
+      - warehouse-data:/var/lib/postgresql/data
+
+  airflow:
+    build: .
+    depends_on:
+      warehouse:
+        condition: service_healthy
+    environment:
+      BING_DWH_URL: postgresql+psycopg2://bing:bing@warehouse:5432/bing_dwh
+    ports:
+      - "8080:8080"
+    command: airflow standalone
+    volumes:
+      - ./dags:/opt/bing-pipeline/dags        # edit DAG/package without rebuilding
+      - ./src:/opt/bing-pipeline/src
+      - ./sql:/opt/bing-pipeline/sql
+      - ./data:/opt/bing-pipeline/data
+
+volumes:
+  warehouse-data:

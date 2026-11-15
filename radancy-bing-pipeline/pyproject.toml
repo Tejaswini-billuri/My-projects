@@ -1,0 +1,28 @@
+[project]
+name = "bing-pipeline"
+version = "0.1.0"
+description = "Airflow pipeline that loads Bing Ads performance exports into a Postgres star schema"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "apache-airflow>=3.0,<3.2",
+    "pandas>=2.2",
+    "pyarrow>=17",
+    "sqlalchemy>=2.0,<2.1",   # 2.1 breaks sqlalchemy-utils, which Airflow depends on
+    "psycopg2-binary>=2.9",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "ruff>=0.6"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/bing_pipeline"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
